@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Loopband Coach – FIT naar Moov Run Plus</title>
+<style>
+  :root { --bg:#0f1419; --card:#1a2129; --fg:#e8edf2; --mut:#8a97a5; --acc:#3ddc97; --warn:#ffb84d; --bad:#ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 -apple-system, system-ui, sans-serif;
+         padding: max(12px, env(safe-area-inset-top)) 12px max(24px, env(safe-area-inset-bottom)); max-width:520px; margin-inline:auto; }
+  h1 { font-size:20px; margin:4px 0 12px; }
+  .card { background:var(--card); border-radius:14px; padding:12px; margin-bottom:12px; }
+  button { font:inherit; border:0; border-radius:10px; padding:12px 14px; background:#2a3541; color:var(--fg); }
+  button.primary { background:var(--acc); color:#06231a; font-weight:700; }
+  button.danger { background:var(--bad); color:#2a0505; font-weight:700; }
+  button:disabled { opacity:.4; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .row > * { flex:1; }
+  .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; text-align:center; }
+  .metrics div b { display:block; font-size:26px; font-variant-numeric:tabular-nums; }
+  .metrics div span { color:var(--mut); font-size:12px; }
+  .big { font-size:44px; font-weight:800; font-variant-numeric:tabular-nums; text-align:center; }
+  .mut { color:var(--mut); font-size:13px; }
+  .steps { max-height:220px; overflow:auto; font-size:14px; }
+  .step { padding:6px 8px; border-radius:8px; display:flex; justify-content:space-between; gap:8px; }
+  .step.cur { background:#24523f; }
+  .step.done { opacity:.4; }
+  input[type=number], input[type=file] { font:inherit; background:#0f1419; color:var(--fg); border:1px solid #33404d; border-radius:8px; padding:8px; width:100%; }
+  label { font-size:13px; color:var(--mut); display:block; margin-bottom:4px; }
+  #log { font:12px/1.3 ui-monospace, monospace; color:var(--mut); max-height:120px; overflow:auto; white-space:pre-wrap; }
+  .warn { color:var(--warn); font-size:13px; }
+</style>
+</head>
+<body>
+<h1>🏃 Loopband Coach</h1>
+
+<div class="card">
+  <div class="row">
+    <button id="btnConnect" class="primary">Verbind loopband</button>
+    <button id="btnHr">Hartslagband (optioneel)</button>
+  </div>
+  <div id="status" class="mut" style="margin-top:8px">Niet verbonden</div>
+  <div id="compat" class="warn"></div>
+</div>
+
+<div class="card">
+  <label>Workout (.fit)</label>
+  <input type="file" id="file" accept=".fit,.FIT">
+  <div id="wkName" class="mut" style="margin-top:6px">Geen workout geladen – je kunt ook gewoon vrij lopen.</div>
+  <div class="steps" id="steps"></div>
+  <div class="row" style="margin-top:8px">
+    <div><label>Standaard helling %</label><input type="number" id="defIncline" value="1" step="0.5" min="0" max="15"></div>
+    <div><label>Max snelheid km/u</label><input type="number" id="maxSpeed" value="14" step="0.5" min="1" max="14"></div>
+    <div><label>Vrij lopen km/u</label><input type="number" id="freeSpeed" value="6" step="0.5" min="1" max="14"></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="mut" id="stepLabel" style="text-align:center">–</div>
+  <div class="big" id="stepTime">--:--</div>
+  <div class="mut" id="stepNext" style="text-align:center"></div>
+  <div class="metrics" style="margin-top:10px">
+    <div><b id="mSpeed">–</b><span>km/u</span></div>
+    <div><b id="mIncl">–</b><span>helling %</span></div>
+    <div><b id="mDist">–</b><span>km</span></div>
+    <div><b id="mTime">00:00</b><span>totaal</span></div>
+    <div><b id="mHr">–</b><span>hartslag</span></div>
+    <div><b id="mTgt">–</b><span>doel km/u</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="row">
+    <button id="btnStart" class="primary" disabled>Start</button>
+    <button id="btnPause" disabled>Pauze</button>
+    <button id="btnNext" disabled>Volgende stap</button>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <button id="spM">Snelheid −0,5</button><button id="spP">Snelheid +0,5</button>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <button id="inM">Helling −0,5</button><button id="inP">Helling +0,5</button>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <button id="btnStop" class="danger" disabled>STOP</button>
+  </div>
+  <p class="warn">Veiligheid: klik de veiligheidssleutel aan je kleding en houd de noodstop van de band binnen bereik. Deze app is gratis en onofficieel; de console van de band blijft altijd leidend.</p>
+</div>
+
+<div class="card"><div id="log"></div></div>
+
+<script>
+// ───────────────────────── FIT-parser (workout_step) ─────────────────────────
+//<fitparser>
+function parseFitWorkout(buffer) {
+  const dv = new DataView(buffer);
+  const hdr = dv.getUint8(0);
+  const dataSize = dv.getUint32(4, true);
+  const sig = String.fromCharCode(dv.getUint8(8), dv.getUint8(9), dv.getUint8(10), dv.getUint8(11));
+  if (sig !== '.FIT') throw new Error('Geen geldig FIT-bestand');
+  let pos = hdr;
+  const end = Math.min(hdr + dataSize, buffer.byteLength);
+  const defs = {};
+  const steps = [];
+  let wkName = null;
+
+  while (pos < end) {
+    const rh = dv.getUint8(pos++);
+    if (rh & 0x80) { // compressed timestamp header
+      const lt = (rh >> 5) & 0x03; const d = defs[lt]; if (!d) throw new Error('Corrupt FIT');
+      pos += d.size; continue;
+    }
+    const lt = rh & 0x0f;
+    if (rh & 0x40) { // definition message
+      pos++; // reserved
+      const le = dv.getUint8(pos++) === 0;
+      const gm = dv.getUint16(pos, le); pos += 2;
+      const nf = dv.getUint8(pos++);
+      const fields = []; let size = 0;
+      for (let i = 0; i < nf; i++) {
+        const num = dv.getUint8(pos), sz = dv.getUint8(pos + 1), bt = dv.getUint8(pos + 2);
+        pos += 3; fields.push({ num, sz, bt }); size += sz;
+      }
+      if (rh & 0x20) {
+        const nd = dv.getUint8(pos++);
+        for (let i = 0; i < nd; i++) { size += dv.getUint8(pos + 1); pos += 3; }
+      }
+      defs[lt] = { le, gm, fields, size };
+    } else { // data message
+      const d = defs[lt]; if (!d) throw new Error('Corrupt FIT');
+      let p = pos; const rec = {};
+      for (const f of d.fields) {
+        let v;
+        const bt = f.bt & 0x1f;
+        if (bt === 7) { // string
+          let s = ''; for (let i = 0; i < f.sz; i++) { const c = dv.getUint8(p + i); if (!c) break; s += String.fromCharCode(c); }
+          try { s = decodeURIComponent(escape(s)); } catch (e) {}
+          v = s;
+        } else if (f.sz === 1) v = dv.getUint8(p);
+        else if (f.sz === 2) v = dv.getUint16(p, d.le);
+        else if (f.sz === 4) v = dv.getUint32(p, d.le);
+        else v = null;
+        rec[f.num] = v; p += f.sz;
+      }
+      pos += d.size;
+      if (d.gm === 27) steps.push(rec);          // workout_step
+      else if (d.gm === 26 && rec[8]) wkName = rec[8]; // workout.wkt_name
+    }
+  }
+
+  // Ruwe stappen → platte lijst met herhalingen uitgerold
+  const out = []; const startOf = {};
+  steps.forEach((s, idx) => {
+    const mi = s[254] != null ? s[254] : idx;
+    startOf[mi] = out.length;
+    const durType = s[1];
+    if (durType === 6 || durType === 7 || durType === 8) { // repeat until steps complete
+      const from = s[2], count = s[4];
+      const slice = out.slice(startOf[from] != null ? startOf[from] : 0);
+      for (let r = 1; r < count; r++) slice.forEach(x => out.push({ ...x }));
+      return;
+    }
+    const name = s[0] || '';
+    let kind = 'open', value = null;
+    if (durType === 0) { kind = 'time'; value = s[2] / 1000; }          // ms → s
+    else if (durType === 1) { kind = 'dist'; value = s[2] / 100; }       // cm → m
+    let speed = null, targetNote = '';
+    if (s[3] === 0) { // speed target
+      if (s[4] === 0 && s[5] != null && s[6] != null && (s[5] || s[6])) {
+        speed = ((s[5] + s[6]) / 2) / 1000 * 3.6; // mm/s → km/u
+      } else if (s[4] !== 0) targetNote = 'snelheidszone';
+    } else if (s[3] === 1) targetNote = 'hartslagdoel';
+    const m = name.match(/(\d+(?:[.,]\d+)?)\s*%/);
+    const incline = m ? parseFloat(m[1].replace(',', '.')) : null;
+    out.push({ name, kind, value, speed, incline, targetNote, intensity: s[7] });
+  });
+  return { name: wkName, steps: out };
+}
+//</fitparser>
+
+// ───────────────────────── Hulpfuncties ─────────────────────────
+const $ = id => document.getElementById(id);
+const fmt = s => { s = Math.max(0, Math.round(s)); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+function log(m) { const l = $('log'); l.textContent = new Date().toLocaleTimeString('nl-BE') + '  ' + m + '\n' + l.textContent; }
+
+if (!navigator.bluetooth) {
+  $('compat').textContent = 'Deze browser ondersteunt geen Web Bluetooth. Op iPhone: open deze pagina in de gratis app "Bluefy" (Safari kan dit niet).';
+  $('btnConnect').disabled = true;
+}
+
+// ───────────────────────── FTMS ─────────────────────────
+const FTMS = 0x1826, TREADMILL_DATA = 0x2acd, CONTROL_POINT = 0x2ad9, SPEED_RANGE = 0x2ad4, INCL_RANGE = 0x2ad5, HR_SVC = 0x180d, HR_CHAR = 0x2a37;
+let dev = null, cp = null, queue = Promise.resolve(), hasControl = false;
+let speedMin = 1, speedMax = 14, inclMin = 0, inclMax = 15;
+const live = { speed: null, incline: null, dist: null, hr: null };
+let targetSpeed = 0, targetIncl = 0;
+
+function write(bytes, why) {
+  queue = queue.then(async () => {
+    try {
+      const data = new Uint8Array(bytes);
+      if (cp.writeValueWithResponse) await cp.writeValueWithResponse(data); else await cp.writeValue(data);
+    } catch (e) { log('Schrijffout (' + why + '): ' + e.message); }
+  });
+  return queue;
+}
+
+function onData(ev) {
+  const v = ev.target.value; let o = 0;
+  const flags = v.getUint16(o, true); o += 2;
+  if (!(flags & 0x0001)) { live.speed = v.getUint16(o, true) / 100; o += 2; }
+  if (flags & 0x0002) o += 2;
+  if (flags & 0x0004) { live.dist = (v.getUint8(o) | (v.getUint8(o + 1) << 8) | (v.getUint8(o + 2) << 16)); o += 3; }
+  if (flags & 0x0008) { live.incline = v.getInt16(o, true) / 10; o += 4; }
+  if (flags & 0x0010) o += 4;
+  if (flags & 0x0020) o += 1;
+  if (flags & 0x0040) o += 1;
+  if (flags & 0x0080) o += 5;
+  if (flags & 0x0100) { const h = v.getUint8(o); if (h > 0) live.hr = h; o += 1; }
+  render();
+}
+
+function onCp(ev) {
+  const v = ev.target.value;
+  if (v.getUint8(0) === 0x80) {
+    const req = v.getUint8(1), res = v.getUint8(2);
+    if (res !== 1) log('Band weigerde opdracht 0x' + req.toString(16) + ' (resultaat ' + res + ')');
+  }
+}
+
+async function connect() {
+  try {
+    dev = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [FTMS, HR_SVC] });
+    dev.addEventListener('gattserverdisconnected', () => { setStatus('Verbinding verbroken'); updateButtons(); log('Verbinding verbroken'); });
+    setStatus('Verbinden met ' + (dev.name || 'apparaat') + '…');
+    const server = await dev.gatt.connect();
+    const svc = await server.getPrimaryService(FTMS);
+    const data = await svc.getCharacteristic(TREADMILL_DATA);
+    await data.startNotifications(); data.addEventListener('characteristicvaluechanged', onData);
+    cp = await svc.getCharacteristic(CONTROL_POINT);
+    await cp.startNotifications(); cp.addEventListener('characteristicvaluechanged', onCp);
+    try { const r = await (await svc.getCharacteristic(SPEED_RANGE)).readValue();
+      speedMin = r.getUint16(0, true) / 100; speedMax = r.getUint16(2, true) / 100; } catch (e) {}
+    try { const r = await (await svc.getCharacteristic(INCL_RANGE)).readValue();
+      inclMin = r.getInt16(0, true) / 10; inclMax = r.getInt16(2, true) / 10; } catch (e) {}
+    await write([0x00], 'control aanvragen'); hasControl = true;
+    setStatus('Verbonden: ' + (dev.name || 'loopband') + ' (' + speedMin + '–' + speedMax + ' km/u, helling ' + inclMin + '–' + inclMax + '%)');
+    log('FTMS verbonden');
+  } catch (e) { setStatus('Mislukt: ' + e.message); log('Verbindfout: ' + e.message); }
+  updateButtons();
+}
+
+async function connectHr() {
+  try {
+    const d = await navigator.bluetooth.requestDevice({ filters: [{ services: [HR_SVC] }] });
+    const s = await (await d.gatt.connect()).getPrimaryService(HR_SVC);
+    const c = await s.getCharacteristic(HR_CHAR);
+    await c.startNotifications();
+    c.addEventListener('characteristicvaluechanged', e => { const v = e.target.value; live.hr = (v.getUint8(0) & 1) ? v.getUint16(1, true) : v.getUint8(1); render(); });
+    log('Hartslagband verbonden');
+  } catch (e) { log('Hartslagband: ' + e.message); }
+}
+
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+function setSpeed(kmh) {
+  const cfgMax = parseFloat($('maxSpeed').value) || 14;
+  kmh = clamp(Math.round(kmh * 10) / 10, speedMin, Math.min(speedMax, cfgMax));
+  targetSpeed = kmh; const n = Math.round(kmh * 100);
+  write([0x02, n & 255, n >> 8], 'snelheid'); render();
+}
+function setIncline(pct) {
+  pct = clamp(Math.round(pct * 2) / 2, inclMin, inclMax);
+  targetIncl = pct; const n = Math.round(pct * 10) & 0xffff;
+  write([0x03, n & 255, (n >> 8) & 255], 'helling'); render();
+}
+
+// ───────────────────────── Workout-engine ─────────────────────────
+let wk = null;                // {name, steps}
+const st = { i: -1, running: false, paused: false, stepElapsed: 0, stepDist: 0, total: 0, lastTick: 0 };
+let audio = null, wake = null;
+
+function beep(n = 1) {
+  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    for (let k = 0; k < n; k++) { const o = audio.createOscillator(), g = audio.createGain(); o.connect(g); g.connect(audio.destination);
+      o.frequency.value = 880; g.gain.value = 0.15; const t = audio.currentTime + k * 0.22; o.start(t); o.stop(t + 0.12); } } catch (e) {}
+  if (navigator.vibrate) navigator.vibrate(200);
+}
+
+function stepText(s) {
+  const dur = s.kind === 'time' ? fmt(s.value) : s.kind === 'dist' ? (s.value >= 1000 ? (s.value / 1000).toFixed(2) + ' km' : Math.round(s.value) + ' m') : 'open';
+  const sp = s.speed ? s.speed.toFixed(1) + ' km/u' : (s.targetNote || '');
+  return [s.name || ('stap'), dur, sp].filter(Boolean).join(' · ');
+}
+
+function renderSteps() {
+  const box = $('steps'); box.innerHTML = '';
+  if (!wk) return;
+  wk.steps.forEach((s, i) => {
+    const d = document.createElement('div');
+    d.className = 'step' + (i === st.i ? ' cur' : i < st.i ? ' done' : '');
+    d.innerHTML = '<span>' + (i + 1) + '. ' + stepText(s).replace(/</g, '&lt;') + '</span>';
+    box.appendChild(d);
+  });
+}
+
+function applyStep(i) {
+  st.i = i; st.stepElapsed = 0; st.stepDist = 0;
+  const s = wk.steps[i];
+  if (s.speed) setSpeed(s.speed);
+  const inc = s.incline != null ? s.incline : (parseFloat($('defIncline').value) || 0);
+  setIncline(inc);
+  log('Stap ' + (i + 1) + '/' + wk.steps.length + ': ' + stepText(s));
+  beep(i === 0 ? 1 : 2); renderSteps(); render();
+}
+
+function nextStep() {
+  if (!wk) return;
+  if (st.i + 1 >= wk.steps.length) { finish(); return; }
+  applyStep(st.i + 1);
+}
+
+async function start() {
+  if (!hasControl) return;
+  beep(0);
+  try { wake = await navigator.wakeLock.request('screen'); } catch (e) {}
+  st.running = true; st.paused = false; st.total = 0; st.lastTick = performance.now();
+  await write([0x07], 'start');
+  if (wk && wk.steps.length) applyStep(0);
+  else { setSpeed(parseFloat($('freeSpeed').value) || 4); setIncline(parseFloat($('defIncline').value) || 0); }
+  updateButtons();
+}
+
+async function togglePause() {
+  if (!st.running) return;
+  if (!st.paused) { st.paused = true; await write([0x08, 0x02], 'pauze'); }
+  else { st.paused = false; st.lastTick = performance.now(); await write([0x07], 'hervat'); setSpeed(targetSpeed); setIncline(targetIncl); }
+  updateButtons();
+}
+
+async function stop(reason) {
+  st.running = false; st.paused = false;
+  if (hasControl && cp) await write([0x08, 0x01], 'stop');
+  try { wake && wake.release(); } catch (e) {}
+  log(reason || 'Gestopt'); updateButtons(); render();
+}
+function finish() { beep(3); stop('Workout klaar 🎉'); }
+
+setInterval(() => {
+  if (!st.running || st.paused) { st.lastTick = performance.now(); return; }
+  const now = performance.now(), dt = (now - st.lastTick) / 1000; st.lastTick = now;
+  st.total += dt; st.stepElapsed += dt;
+  const v = (live.speed != null ? live.speed : targetSpeed) / 3.6; st.stepDist += v * dt;
+  if (wk && st.i >= 0) {
+    const s = wk.steps[st.i];
+    const rem = s.kind === 'time' ? s.value - st.stepElapsed : s.kind === 'dist' ? s.value - st.stepDist : null;
+    if (rem != null && rem <= 3 && rem > 2.75) beep(1);
+    if (rem != null && rem <= 0) nextStep();
+  }
+  render();
+}, 250);
+
+// ───────────────────────── UI ─────────────────────────
+function setStatus(t) { $('status').textContent = t; }
+function updateButtons() {
+  const conn = hasControl && dev && dev.gatt.connected;
+  $('btnStart').disabled = !conn || st.running;
+  $('btnPause').disabled = !st.running; $('btnPause').textContent = st.paused ? 'Hervat' : 'Pauze';
+  $('btnNext').disabled = !st.running || !wk;
+  $('btnStop').disabled = !conn;
+}
+function render() {
+  $('mSpeed').textContent = live.speed != null ? live.speed.toFixed(1) : '–';
+  $('mIncl').textContent = live.incline != null ? live.incline.toFixed(1) : (st.running ? targetIncl.toFixed(1) : '–');
+  $('mDist').textContent = live.dist != null ? (live.dist / 1000).toFixed(2) : '–';
+  $('mTime').textContent = fmt(st.total);
+  $('mHr').textContent = live.hr != null ? live.hr : '–';
+  $('mTgt').textContent = st.running ? targetSpeed.toFixed(1) : '–';
+  if (wk && st.i >= 0 && st.running) {
+    const s = wk.steps[st.i];
+    $('stepLabel').textContent = (st.i + 1) + '/' + wk.steps.length + ' · ' + (s.name || 'stap') + (s.targetNote ? ' (' + s.targetNote + ': stel zelf snelheid in)' : '');
+    $('stepTime').textContent = s.kind === 'time' ? fmt(s.value - st.stepElapsed) : s.kind === 'dist' ? Math.max(0, Math.round(s.value - st.stepDist)) + ' m' : '∞';
+    const n = wk.steps[st.i + 1]; $('stepNext').textContent = n ? 'Straks: ' + stepText(n) : 'Laatste stap';
+  } else if (st.running) { $('stepLabel').textContent = 'Vrij lopen'; $('stepTime').textContent = fmt(st.total); $('stepNext').textContent = ''; }
+  else { $('stepLabel').textContent = '–'; $('stepTime').textContent = '--:--'; $('stepNext').textContent = ''; }
+}
+
+$('btnConnect').onclick = connect;
+$('btnHr').onclick = connectHr;
+$('btnStart').onclick = start;
+$('btnPause').onclick = togglePause;
+$('btnNext').onclick = nextStep;
+$('btnStop').onclick = () => stop('Gestopt door gebruiker');
+$('spM').onclick = () => setSpeed(targetSpeed - 0.5);
+$('spP').onclick = () => setSpeed(targetSpeed + 0.5);
+$('inM').onclick = () => setIncline(targetIncl - 0.5);
+$('inP').onclick = () => setIncline(targetIncl + 0.5);
+$('file').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    wk = parseFitWorkout(await f.arrayBuffer());
+    if (!wk.steps.length) throw new Error('Geen workout-stappen gevonden in dit bestand');
+    wk.name = wk.name || f.name.replace(/\.fit$/i, '');
+    const tot = wk.steps.reduce((a, s) => a + (s.kind === 'time' ? s.value : 0), 0);
+    $('wkName').textContent = wk.name + ' – ' + wk.steps.length + ' stappen' + (tot ? ', ± ' + fmt(tot) + ' (tijdstappen)' : '');
+    st.i = -1; renderSteps(); log('Workout geladen: ' + wk.name);
+  } catch (err) { wk = null; $('wkName').textContent = 'Fout: ' + err.message; log('FIT-fout: ' + err.message); }
+  updateButtons();
+};
+render(); updateButtons();
+</script>
+</body>
+</html>
