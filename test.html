@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="nl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bluetooth-test</title>
+<style>
+body{font:16px -apple-system,sans-serif;background:#0f1419;color:#e8edf2;padding:14px;max-width:520px;margin:auto}
+button{display:block;width:100%;font:inherit;padding:14px;margin:10px 0;border:0;border-radius:10px;background:#3ddc97;color:#06231a;font-weight:700}
+pre{white-space:pre-wrap;background:#1a2129;padding:10px;border-radius:10px;font-size:13px}
+</style></head><body>
+<h2>Bluetooth-test</h2>
+<button id="b0">1. Check browser</button>
+<button id="b1">2. Zoek alle apparaten</button>
+<button id="b2">3. Zoek alleen FTMS-apparaten</button>
+<button id="b3">4. Zoek apparaat en toon alle services</button>
+<pre id="out">Tik op een knop.</pre>
+<script>
+const out=document.getElementById('out');
+function p(m){out.textContent=m+'\n\n'+out.textContent}
+function err(e){ if(e==null) return 'leeg'; if(typeof e!=='object') return 'waarde: '+String(e);
+  let o={}; for(const k of ['name','message','code']) if(e[k]!==undefined) o[k]=e[k];
+  try{ return JSON.stringify(o)+' / '+String(e);}catch(x){return String(e);} }
+document.getElementById('b0').onclick=async()=>{
+  let t='navigator.bluetooth: '+(navigator.bluetooth?'ja':'NEE')+'\nhttps: '+location.protocol+'\nsecure: '+isSecureContext+'\n'+navigator.userAgent;
+  try{ if(navigator.bluetooth&&navigator.bluetooth.getAvailability) t+='\nbeschikbaar: '+await navigator.bluetooth.getAvailability(); }catch(e){t+='\ngetAvailability fout: '+err(e)}
+  p(t)};
+document.getElementById('b1').onclick=async()=>{
+  try{const d=await navigator.bluetooth.requestDevice({acceptAllDevices:true}); p('OK: '+(d.name||'(geen naam)')+' '+d.id)}catch(e){p('FOUT alle: '+err(e))}};
+document.getElementById('b2').onclick=async()=>{
+  try{const d=await navigator.bluetooth.requestDevice({filters:[{services:[0x1826]}]}); p('OK: '+(d.name||'(geen naam)')+' '+d.id)}catch(e){p('FOUT FTMS: '+err(e))}};
+document.getElementById('b3').onclick=async()=>{
+  try{const d=await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:[0x1826,0x180d,0x180a,0x1800,0x1801,0xfff0,0xffe0,0xfee0,0xfe00]});
+    p('Gekozen: '+(d.name||d.id)); const s=await d.gatt.connect(); p('Verbonden');
+    const all=await s.getPrimaryServices(); p('Services: '+all.map(x=>x.uuid).join('\n'));
+  }catch(e){p('FOUT: '+err(e))}};
+</script></body></html>
