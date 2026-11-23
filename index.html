@@ -241,16 +241,17 @@ function errText(e) {
 }
 
 async function pickDevice() {
-  // Eerst alle apparaten tonen; lukt dat niet, dan alleen apparaten die FTMS adverteren.
-  try {
-    log('Apparaten zoeken (alle)…');
-    return await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [FTMS, HR_SVC] });
-  } catch (e1) {
-    log('Zoeken (alle) mislukt: ' + errText(e1));
-    if (e1 && e1.name === 'NotFoundError') throw e1; // gebruiker koos niets
-    log('Opnieuw proberen met FTMS-filter…');
-    return await navigator.bluetooth.requestDevice({ filters: [{ services: [FTMS] }], optionalServices: [HR_SVC] });
+  // In tests gaf Bluefy fout 2 met "optionalServices"; een filter op FTMS alleen werkte wel.
+  const tries = [
+    ['filter op FTMS', { filters: [{ services: [FTMS] }] }],
+    ['alle apparaten', { acceptAllDevices: true }],
+  ];
+  let last;
+  for (const [label, opts] of tries) {
+    try { log('Apparaten zoeken (' + label + ')…'); return await navigator.bluetooth.requestDevice(opts); }
+    catch (e) { last = e; log('Zoeken (' + label + ') mislukt: ' + errText(e)); if (e && e.name === 'NotFoundError') break; }
   }
+  throw last;
 }
 
 async function connect() {
