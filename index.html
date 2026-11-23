@@ -199,12 +199,21 @@ let speedMin = 1, speedMax = 14, inclMin = 0, inclMax = 15;
 const live = { speed: null, incline: null, dist: null, hr: null };
 let targetSpeed = 0, targetIncl = 0;
 
+let writeLogged = false;
+async function tryWrite(data) {
+  const errs = [];
+  for (const m of ['writeValueWithResponse', 'writeValue', 'writeValueWithoutResponse']) {
+    if (typeof cp[m] !== 'function') { errs.push(m + ': niet beschikbaar'); continue; }
+    try { await cp[m](data); if (!writeLogged) { log('Schrijven gelukt via ' + m); writeLogged = true; } return; }
+    catch (e) { errs.push(m + ': ' + errText(e)); }
+  }
+  throw new Error(errs.join(' | '));
+}
+
 function write(bytes, why) {
   queue = queue.then(async () => {
-    try {
-      const data = new Uint8Array(bytes);
-      if (cp.writeValueWithResponse) await cp.writeValueWithResponse(data); else await cp.writeValue(data);
-    } catch (e) { log('Schrijffout (' + why + '): ' + e.message); }
+    try { await tryWrite(new Uint8Array(bytes)); }
+    catch (e) { log('Schrijffout (' + why + ', 0x' + bytes[0].toString(16) + '): ' + errText(e)); }
   });
   return queue;
 }
