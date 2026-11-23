@@ -233,12 +233,15 @@ function onData(ev) {
   render();
 }
 
+const OPS = { 0x00: 'control aanvragen', 0x02: 'snelheid', 0x03: 'helling', 0x07: 'start/hervat', 0x08: 'stop/pauze' };
+const RES = { 1: 'GELUKT', 2: 'niet ondersteund', 3: 'ongeldige waarde', 4: 'mislukt', 5: 'geen toestemming' };
+const hex = v => Array.from(new Uint8Array(v.buffer, v.byteOffset, v.byteLength)).map(b => b.toString(16).padStart(2, '0')).join(' ');
 function onCp(ev) {
   const v = ev.target.value;
   if (v.getUint8(0) === 0x80) {
     const req = v.getUint8(1), res = v.getUint8(2);
-    if (res !== 1) log('Band weigerde opdracht 0x' + req.toString(16) + ' (resultaat ' + res + ')');
-  }
+    log('Band antwoordt op ' + (OPS[req] || '0x' + req.toString(16)) + ': ' + (RES[res] || res));
+  } else log('Band-bericht: ' + hex(v));
 }
 
 function errText(e) {
@@ -285,6 +288,9 @@ async function connect() {
     step = 'besturingskanaal';
     cp = await svc.getCharacteristic(CONTROL_POINT);
     await cp.startNotifications(); cp.addEventListener('characteristicvaluechanged', onCp);
+    try { const f = await (await svc.getCharacteristic(0x2acc)).readValue(); log('Machine-features: ' + hex(f)); } catch (e) { log('Features niet leesbaar'); }
+    try { const sc = await svc.getCharacteristic(0x2ada); await sc.startNotifications();
+      sc.addEventListener('characteristicvaluechanged', ev => log('Band-status: ' + hex(ev.target.value))); } catch (e) { log('Status-kanaal niet beschikbaar'); }
     step = 'bereiken lezen';
     try { const r = await (await svc.getCharacteristic(SPEED_RANGE)).readValue();
       speedMin = r.getUint16(0, true) / 100; speedMax = r.getUint16(2, true) / 100; } catch (e) { log('Snelheidsbereik niet leesbaar'); }
